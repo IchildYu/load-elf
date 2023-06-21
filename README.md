@@ -4,11 +4,11 @@ ELF loader for x86-64/x86/aarch64/arm.
 
 ## Why load-elf?
 
-For binary analysis, it is common that we can't run this binary (malware) or it's difficult to debug (android native library). With elf-loader, these binaries can be viewed as simple external libraries and we can do whatever we want with this binary.
+For binary analysis, it is common that we can't run this binary (malware) or it's difficult to debug (android native library). With elf-loader, these binaries can be viewed as simple external libraries and we can do whatever we want.
 
 ## How to use
 
-For x86-64, `x64_main.c` is enough. Just write your code in function main.
+For x86-64, `x64_main.c` is enough. Just write your code in function main at end of the file.
 
 For other arches, a simple makefile is provided. Write code in `main.c` and `make x86/arm/arm64`.
 
