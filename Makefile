@@ -6,14 +6,14 @@ all: x64
 	@echo "arch not specified, default x64"
 
 x64:
-	gcc ${CFLAGS} ${SRC} ./src/x64_do_reloc.c ./main.c -o main
+	gcc ${SRC} ./src/x64_do_reloc.c ./main.c -o main ${CFLAGS}
 
 x86:
-	gcc -m32 ${CFLAGS} ${SRC} ./src/x86_do_reloc.c ./main.c -o main -D __32__
+	gcc -m32 ${SRC} ./src/x86_do_reloc.c ./main.c -o main -D __32__ ${CFLAGS}
 
 arm64:
-	aarch64-linux-gnu-gcc ${CFLAGS} ${SRC} ./src/arm64_do_reloc.c ./main.c -o main
+	aarch64-linux-gnu-gcc ${SRC} ./src/arm64_do_reloc.c ./main.c -o main ${CFLAGS}
 
 arm:
-	arm-linux-gnueabi-gcc ${CFLAGS} ${SRC} ./src/arm_do_reloc.c ./main.c -o main -D __32__
+	arm-linux-gnueabi-gcc ${SRC} ./src/arm_do_reloc.c ./main.c -o main -D __32__ ${CFLAGS}
 
