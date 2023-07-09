@@ -339,6 +339,7 @@ void* load_with_mmap(const char* path) {
 					return NULL;
 				}
 			}
+			memset((void*) ((size_t) base + pheader.p_vaddr + pheader.p_filesz), 0, pheader.p_memsz - pheader.p_filesz);
 		}
 
 		{
