@@ -18,6 +18,8 @@ int getchar();
 #include "logger.h"
 #include "elf_struct.h"
 
+int (*init_array_filter)(void* base, void (*init_array_item)());
+
 extern int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sym* symtab, const char* strtab) __attribute__((weak));
 
 #define SKIP_LOAD_WITH_DL
@@ -210,13 +212,20 @@ int load_dynamic(void* base, const elf_dyn* dyn) {
 			int choice = '?';
 			for (int i = 0; i < count; i++) {
 				if (!init_array[i]) continue;
-				while (choice != 'y' && choice != 'n' && choice != 'a' && choice != 'o') {
+				while (!init_array_filter && choice != 'y' && choice != 'n' && choice != 'a' && choice != 'o') {
 					LOGI("\texecute function %p? [(y)es/(n)o/(a)ll items left/n(o)ne items left] ", init_array[i]);
 					choice = getchar();
 					if (choice != '\n') while (getchar() != '\n') ; // skip line
 					if (choice >= 'A' && choice <= 'Z') choice += 0x20; // convert to lower case
 				}
-				if ((uchar) (choice - 'n') > 2) { // 'y' or 'a'
+				if (init_array_filter) {
+					if (init_array_filter(base, init_array[i])) {
+						LOGI("\texecuting function at %p...\n", init_array[i]);
+						init_array[i]();
+					} else {
+						LOGI("\t skipping function at %p...\n", init_array[i]);
+					}
+				} else if ((uchar) (choice - 'n') > 2) { // 'y' or 'a'
 					LOGI("\texecuting function at %p...\n", init_array[i]);
 					init_array[i]();
 					if (choice == 'y') choice = '?';
