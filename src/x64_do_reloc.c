@@ -18,11 +18,20 @@ int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sy
 	#define name (strtab + symtab[sym].st_name)
 	switch (type) {
 	case R_NONE:
+		LOGV("R_NONE.\n");
 		break;
 	case R_COPY:
 		if (value) {
-			memcpy((void*) ((size_t) base + offset), (const void*) ((size_t) base + value), size);
+			LOGV("R_COPY: from +0x%llx to +0x%llx size 0x%llx.\n", value, offset, size);
+			if (offset != value) {
+				memcpy((void*) ((size_t) base + offset), (const void*) ((size_t) base + value), size);
+			} else {
+				LOGE("Maybe unspecified R_COPY at +0x%llx size 0x%llx.\n", offset, size);
+				goto R_COPY_name;
+			}
 		} else {
+			R_COPY_name:
+			LOGV("R_COPY: from `%s' to +0x%llx size 0x%llx.\n", name, offset, size);
 			const void* sym_value = dlsym((void*) -1, name); // RTLD_DEFAULT
 			if (!sym_value) {
 				LOGW("failed to resolve symbol `%s'.\n", name);
@@ -34,8 +43,10 @@ int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sy
 	case R_GLOB_DAT:
 	case R_JUMP_SLOT:
 		if (value) {
+			LOGV("R_GLOB_DAT/R_JUMP_SLOT: set +0x%llx at +0x%llx.\n", value, offset);
 			*(size_t*) ((size_t) base + offset) = (size_t) base + value;
 		} else {
+			LOGV("R_GLOB_DAT/R_JUMP_SLOT: set `%s' at +0x%llx.\n", name, offset);
 			const void* sym_value = dlsym((void*) -1, name); // RTLD_DEFAULT
 			if (!sym_value) {
 				LOGW("failed to resolve symbol `%s'.\n", name);
@@ -45,15 +56,19 @@ int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sy
 		}
 		break;
 	case R_RELATIVE:
+		LOGV("R_RELATIVE: set +0x%llx at +0x%llx.\n", addend, offset);
 		*(size_t*) ((size_t) base + offset) = (size_t) base + addend;
 		break;
 	case R_IRELATIVE:
+		LOGV("R_IRELATIVE: set (+0x%llx)() at +0x%llx.\n", addend, offset);
 		*(size_t*) ((size_t) base + offset) = ((size_t (*)()) ((size_t) base + addend))();
 		break;
 	case 1: // R_X86_64_64
 		if (value) {
+			LOGV("R_X86_64_64: set +0x%llx+0x%llx at +0x%llx.\n", value, addend, offset);
 			*(size_t*) ((size_t) base + offset) = (size_t) base + value + addend;
 		} else {
+			LOGV("R_X86_64_64: set `%s'+0x%llx at +0x%llx.\n", name, addend, offset);
 			const void* sym_value = dlsym((void*) -1, name); // RTLD_DEFAULT
 			if (!sym_value) {
 				LOGW("failed to resolve symbol `%s'.\n", name);
