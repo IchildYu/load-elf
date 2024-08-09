@@ -232,7 +232,7 @@ For other arches, a simple makefile is provided. Write code in `main.c` and `mak
 
 ### x64
 
-Compile `x64_main.c` and run:
+~~Compile `x64_main.c` and run:~~ `x64_main.c` has been deleted, use main.c and Makefile.
 
 ```
 # gcc ./x64_main.c -o main -g -ldl
