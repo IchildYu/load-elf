@@ -2,9 +2,81 @@
 
 ELF loader for x86-64/x86/aarch64/arm.
 
-## Bugfix
+## Updates
 
-### 20240801
+### 20240809 update
+
+- Remove file `x64_main.c`, Makefile is enough (I just forgot to update this file when updating codes, and I'd rather delete this file than update it).
+
+- New api: `register_global_symbol`. Register global symbols before load_elf, so that you don't need find the offset of any got table in elf to fixup it. Also, you can use this to hook functions.
+  
+- New api: `load_global_library`. Load other needed libraries. Try dlopen first, then try load_with_mmap. Also, this api is used to provide symbol fixup.
+
+load_elf uses `get_global_symbol` to find symbol address. First it searches symbols registered by register_global_symbol, then try to get symbol by dlsym, and finally search all global library load by load_with_mmap in load_global_library for this symbol. Here is a simple example.
+
+```cpp
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dlfcn.h>
+#include <assert.h>
+#include <errno.h>
+#include "load_elf.h"
+#include "logger.h"
+
+size_t __strlen_chk(const char *s, size_t size) {
+	for (size_t i = 0; i < size; i++) {
+		if (s[i] == 0) return i;
+	}
+	return size;
+}
+
+int* __errno() {
+	return &errno;
+}
+
+int __system_property_get(const char* name, char* out) {
+	const char* s = getenv(name);
+	if (s == NULL) {
+		out[0] = 0;
+		return 0;
+	} else {
+		strcpy(out, s);
+		return strlen(out);
+	}
+}
+
+int filter(void* base, void (*init_array_item)()) {
+	return 1;
+}
+
+int main() {
+	// SET_LOGV();
+	init_array_filter = filter;
+
+	// function hook
+	// register_global_symbol("__cxa_atexit", filter); // avoid possible segment fault when exiting
+
+	// symbol implementation
+	register_global_symbol("__errno", __errno);
+	register_global_symbol("__strlen_chk", __strlen_chk);
+	register_global_symbol("__system_property_get", __system_property_get);
+
+	// load needed c++ library
+	load_global_library("./libc++_shared.so");
+
+	// After all symbols prepared, it's time to have fun!
+	void* base = load_elf("./libelf.so");
+
+	// your codes here
+
+	puts("done.");
+	return 0;
+}
+```
+
+### 20240801 bugfix
 
 In previous version, some cpp operations (such as `cout << anything`) in library may cause segment fault. It's something about symbol, and I'm not going to fix that. But now I can give you a error log if this would occur in `load_elf`, and you can add some codes to fix this bug.
 
