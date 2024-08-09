@@ -3,6 +3,7 @@
 #include <string.h>
 #include "elf_struct.h"
 #include "logger.h"
+#include "load_elf.h"
 
 #define R_COPY 5
 #define R_GLOB_DAT 6
@@ -32,7 +33,7 @@ int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sy
 		} else {
 			R_COPY_name:
 			LOGV("R_COPY: from `%s' to +0x%lx size 0x%lx.\n", name, offset, size);
-			const void* sym_value = dlsym((void*) -1, name); // RTLD_DEFAULT
+			const void* sym_value = get_global_symbol(name);
 			if (!sym_value) {
 				LOGW("failed to resolve symbol `%s'.\n", name);
 				break;
@@ -47,7 +48,7 @@ int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sy
 			*(size_t*) ((size_t) base + offset) = (size_t) base + value;
 		} else {
 			LOGV("R_GLOB_DAT/R_JUMP_SLOT: set `%s' at +0x%lx.\n", name, offset);
-			const void* sym_value = dlsym((void*) -1, name); // RTLD_DEFAULT
+			const void* sym_value = get_global_symbol(name);
 			if (!sym_value) {
 				LOGW("failed to resolve symbol `%s'.\n", name);
 				break;

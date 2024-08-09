@@ -17,6 +17,111 @@ int getchar();
 #include <stdlib.h>
 #include "logger.h"
 #include "elf_struct.h"
+#include "load_elf.h"
+
+void* load_with_mmap(const char* path);
+
+typedef struct SymbolList {
+	struct SymbolList* next;
+	const char* symbol;
+	void* addr;
+} SymbolList;
+
+typedef struct LibraryList {
+	struct LibraryList* next;
+	const char* libname;
+	void* base;
+} LibraryList;
+
+static SymbolList symbol_header = { NULL, "", NULL };
+
+static LibraryList library_header = { NULL, "", NULL };
+
+void register_global_symbol(const char* symbol, void* target) {
+	LOGD("register symbol `%s' at %p.\n", symbol, target);
+	SymbolList* next = symbol_header.next;
+	SymbolList* last = &symbol_header;
+	while (next) {
+		int r = strcmp(symbol, next->symbol);
+		if (r > 0) {
+			last = next;
+			next = next->next;
+		} else if (r == 0) {
+			LOGW("registered symbol `%s' (%p) replaced with %p.\n", symbol, next->addr, target);
+			next->addr = target;
+			return;
+		} else {
+			break;
+		}
+	}
+	// next == NULL || strcmp(symbol, next->symbol) < 0
+	SymbolList* s = (SymbolList*) malloc(sizeof(SymbolList));
+	s->symbol = symbol;
+	s->addr = target;
+	s->next = next;
+	last->next = s;
+}
+
+void* find_registered_symbol(const char* symbol) {
+	SymbolList* iter = symbol_header.next;
+	while (iter) {
+		int r = strcmp(symbol, iter->symbol);
+		if (r == 0) {
+			return iter->addr;
+		} else if (r < 0) {
+			return NULL;
+		} else {
+			iter = iter->next;
+		}
+	}
+	return NULL;
+}
+
+void* get_global_symbol(const char* symbol) {
+	void* addr = find_registered_symbol(symbol);
+	if (addr) {
+		return addr;
+	}
+	addr = dlsym((void*) -1, symbol);
+	if (addr) {
+		return addr;
+	}
+	LibraryList* iter = library_header.next;
+	while (iter) {
+		addr = get_symbol_by_name(iter->base, symbol);
+		if (addr) {
+			return addr;
+		}
+		iter = iter->next;
+	}
+	return NULL;
+}
+
+void load_needed_library(const char* libname) {
+	LOGD("loading needed library `%s'.\n", libname);
+	void* handle = dlopen(libname, RTLD_NOW | RTLD_GLOBAL);
+	if (handle == NULL) {
+		LOGW("failed to load needed library `%s': %s.\n", libname, dlerror());
+	}
+}
+
+void load_global_library(const char* libname) {
+	LOGD("loading global library `%s'.\n", libname);
+	void* handle = dlopen(libname, RTLD_NOW | RTLD_GLOBAL);
+	if (handle) {
+		return;
+	}
+	LOGW("dlopen failed to load global library `%s': %s.\n", libname, dlerror());
+
+	void* base = load_with_mmap(libname);
+	if (base) {
+		LibraryList* lib = (LibraryList*) malloc(sizeof(LibraryList));
+		lib->next = library_header.next;
+		library_header.next = lib;
+		lib->libname = libname;
+		lib->base = base;
+	}
+}
 
 int (*init_array_filter)(void* base, void (*init_array_item)());
 
@@ -129,9 +234,7 @@ int load_dynamic(void* base, const elf_dyn* dyn) {
 
 	for (const elf_dyn* it = dyn; it->d_tag != 0; it++) {
 		if (it->d_tag != 1) continue; // DT_NEEDED: name of needed library
-		LOGD("loading needed library `%s'.\n", strtab + it->d_un);
-		if (!dlopen(strtab + it->d_un, RTLD_NOW | RTLD_GLOBAL))
-			LOGW("failed to load needed library `%s': %s.\n", strtab + it->d_un, dlerror());
+		load_needed_library(strtab + it->d_un);
 	}
 
 	int rel_done = 0;
@@ -266,6 +369,10 @@ void* load_with_mmap(const char* path) {
 	LOGI("loading %s with mmap...\n", path);
 	int fd = open(path, O_RDONLY);
 	LOGV("open(path, O_RDONLY) returns %d\n", fd);
+	if (fd < 0) {
+		LOGE("file `%s' not found.\n", path);
+		return NULL;
+	}
 
 	elf_header header;
 	LOGV("reading elf header from file...\n");
@@ -394,12 +501,12 @@ void* get_symbol_by_name(void* base, const char* symbol) {
 	for (; ; symtab++) {
 		if (symtab->st_name == 0) continue;
 		if (symtab->st_name >= strsz) {
-			LOGE("failed to resolve symbol `%s' from library (%p): not found.\n", symbol, base);
+			// LOGE("failed to resolve symbol `%s' from library (%p): not found.\n", symbol, base);
 			return NULL;
 		}
 		if (strcmp(strtab + symtab->st_name, symbol) == 0) {
 			if (symtab->st_value == 0) {
-				LOGE("failed to resolve symbol `%s' from library (%p): value is NULL.\n", symbol, base);
+				// LOGE("failed to resolve symbol `%s' from library (%p): value is NULL.\n", symbol, base);
 				return NULL;
 			}
 			if (elf_st_type(symtab->st_info) != 10) { // STT_GNU_IFUNC

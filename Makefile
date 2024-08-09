@@ -14,6 +14,8 @@ x86:
 arm64:
 	aarch64-linux-gnu-gcc ${SRC} ./src/arm64_do_reloc.c ./main.c -o main ${CFLAGS}
 
+aarch64: arm64
+
 arm:
 	arm-linux-gnueabi-gcc ${SRC} ./src/arm_do_reloc.c ./main.c -o main -D __32__ ${CFLAGS}
 
