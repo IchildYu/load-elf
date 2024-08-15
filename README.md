@@ -4,6 +4,10 @@ ELF loader for x86-64/x86/aarch64/arm.
 
 ## Updates
 
+### 20240815 update
+
+Merge [signal-breakpoint](https://github.com/IchildYu/signal-breakpoint).
+
 ### 20240809 update
 
 - Remove file `x64_main.c`, Makefile is enough (I just forgot to update this file when updating codes, and I'd rather delete this file than update it).
