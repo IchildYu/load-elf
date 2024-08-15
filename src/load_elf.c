@@ -19,6 +19,10 @@ int getchar();
 #include "elf_struct.h"
 #include "load_elf.h"
 
+int (*init_array_filter)(void* base, void (*init_array_item)());
+
+extern int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sym* symtab, const char* strtab) __attribute__((weak));
+
 void* load_with_mmap(const char* path);
 
 typedef struct SymbolList {
@@ -122,10 +126,6 @@ void load_global_library(const char* libname) {
 		lib->base = base;
 	}
 }
-
-int (*init_array_filter)(void* base, void (*init_array_item)());
-
-extern int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sym* symtab, const char* strtab) __attribute__((weak));
 
 #define SKIP_LOAD_WITH_DL
 
@@ -293,13 +293,24 @@ int load_dynamic(void* base, const elf_dyn* dyn) {
 		void (*init)() = (void (*)()) ((size_t) base + res->d_un);
 		LOGI("init proc detected: %p.\n", init);
 		int choice = 'y';
-		do {
-			LOGI("Execute init proc? [(y)es/(n)o] ");
-			choice = getchar();
-			if (choice != '\n') while (getchar() != '\n') ;
-			if (choice >= 'A' && choice <= 'Z') choice += 0x20;
-		} while (choice != 'y' && choice != 'n');
-		if (choice == 'y') init();
+		if (!init_array_filter) {
+			do {
+				LOGI("Execute init proc? [(y)es/(n)o] ");
+				choice = getchar();
+				if (choice != '\n') while (getchar() != '\n') ;
+				if (choice >= 'A' && choice <= 'Z') choice += 0x20;
+			} while (choice != 'y' && choice != 'n');
+		} else if (init_array_filter(base, init)) {
+			choice = 'y';
+		} else {
+			choice = 'n';
+		}
+		if (choice == 'y') {
+			LOGI("\texecuting init at %p...\n", init);
+			init();
+		} else {
+			LOGI("\t skipping init at %p...\n", init);
+		}
 	}
 
 	res = find_dyn_entry(dyn, 0x19); // DT_INIT_ARRAY

@@ -1,6 +1,21 @@
 #ifndef __ELF_STRUCT_H__
 #define __ELF_STRUCT_H__
 
+#ifdef __64__
+	#undef __64__
+#endif
+#ifdef __32__
+	#undef __32__
+#endif
+
+#if defined(ARM) || defined(X86)
+	#define __32__
+#elif defined(ARM64) || defined(AARCH64) || defined(X64)
+	#define __64__
+#else
+	#error "invalid arch"
+#endif
+
 #define R_NONE 0
 
 typedef unsigned char uchar;

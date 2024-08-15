@@ -3,16 +3,16 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-const char* LOG_LEVEL_CHARS = "EWIDV";
-const char* LOG_LEVEL_COLORS[] = {
+static const char* LOG_LEVEL_CHARS = "EWIDV";
+static const char* LOG_LEVEL_COLORS[] = {
 	"\x1b[31m",
 	"\x1b[33m",
 	"\x1b[32m",
 	"\x1b[0m",
 	"\x1b[34m",
 };
-int _log_level = INFO;
-int _log_color = 1;
+static int _log_level = INFO;
+static int _log_color = 1;
 
 void set_log_level(int log_level) {
 	if (log_level < 0) log_level = 0;
