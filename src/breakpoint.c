@@ -41,7 +41,7 @@ typedef struct BPList {
 
 static BPList bplist_header = { NULL };
 
-void nop(const SigContext* ctx) {
+void nop(SigContext* ctx) {
 	// empty implementation
 }
 
