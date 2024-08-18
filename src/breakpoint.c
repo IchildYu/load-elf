@@ -41,7 +41,7 @@ typedef struct BPList {
 
 static BPList bplist_header = { NULL };
 
-void nop(const SigContext* ctx) {
+void nop(SigContext* ctx) {
 	// empty implementation
 }
 
@@ -146,7 +146,7 @@ void breakpoint(void* address, /* int ins_size, */ void (*handler)(SigContext* c
 	#if !defined(TRAP_FLAG) // ARM || AARCH64, breakpoint at next instruction
 		BPList* nextbp = (BPList*) malloc(sizeof(BPList));
 		nextbp->address = (void*) ((size_t) address + ins_size);
-		nextbp->handler = nop;
+		nextbp->handler = (void*) nop;
 		nextbp->next = bplist_header.next;
 		nextbp->ins_size = -ins_size; // negative
 		bplist_header.next = nextbp;
