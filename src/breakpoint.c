@@ -4,7 +4,6 @@
  * https://github.com/scottt/debugbreaks
 /**/
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
@@ -13,6 +12,7 @@
 #include <sys/mman.h>
 #include <ucontext.h>
 #include "breakpoint.h"
+#include "logger.h"
 
 #if defined(ARM)
 	// arm mode, NOT THUMB MODE
@@ -41,7 +41,7 @@ typedef struct BPList {
 
 static BPList bplist_header = { NULL };
 
-void nop(SigContext* ctx) {
+void nop(const SigContext* ctx) {
 	// empty implementation
 }
 
@@ -50,13 +50,13 @@ void sigtrap_handler(int signum, siginfo_t* siginfo, void* context) {
 	SigContext* ctx = (void*) &uc->uc_mcontext;
 
 	void* pc = (void*) ctx->pc;
-	// printf("SIGTRAP: %p\n", pc);
-	// getchar();
+	LOGD("SIGTRAP: %p\n", pc);
 
 	#if defined(TRAP_FLAG) // x86 || x64
 		static BPList* lastbp = NULL;
 		if (lastbp) {
 			assert((ctx->eflags & TRAP_FLAG) == TRAP_FLAG);
+			LOGD("clear TRAP FLAG, set breakpoint at %p.\n", lastbp->address);
 			ctx->eflags &= ~TRAP_FLAG;
 			memcpy(lastbp->address, brk_ins, sizeof(brk_ins)); // set break
 			lastbp = NULL;
@@ -64,23 +64,29 @@ void sigtrap_handler(int signum, siginfo_t* siginfo, void* context) {
 		}
 		// in x86/x64, saved_pc = pc + ins_size
 		// in arm/arm64, saved_pc = pc
-		pc = (void*) ((size_t) pc - sizeof(brk_ins));
-		ctx->pc = (size_t) pc;
+		#if defined(X86) || defined(X64)
+			pc = (void*) ((size_t) pc - sizeof(brk_ins));
+			ctx->pc = (size_t) pc;
+		#endif
 	#endif
 
 	int handler_found = 0;
 	struct BPList* bp = bplist_header.next;
 	while (bp) {
 		if (bp->address == pc) {
+			LOGD("handler %p at %p.\n", bp->handler, bp->address);
 			handler_found = 1;
 			// restore original ins
+			LOGD("restore instruction at %p.\n", bp->address);
 			memcpy(bp->address, bp->saved_ins, sizeof(brk_ins));
 			bp->handler(ctx);
 
 			#if defined(TRAP_FLAG) // x86 || x64
+				LOGD("set TRAP FLAG.\n");
 				ctx->eflags |= TRAP_FLAG;
 				lastbp = bp;
 			#else // arm and aarch6
+				LOGD("set breakpoint at %p.\n", (void*) ((size_t) bp->address + bp->ins_size));
 				// breakpoint ins saved positive ins_size
 				// and next ins saved negative ins_size
 				memcpy((void*) ((size_t) bp->address + bp->ins_size), brk_ins, sizeof(brk_ins)); // set break
@@ -91,11 +97,12 @@ void sigtrap_handler(int signum, siginfo_t* siginfo, void* context) {
 		bp = bp->next;
 	}
 	if (!handler_found) {
-		printf("Undefined breakpoint at %p.\n", pc);
+		LOGE("Undefined breakpoint at %p.\n", pc);
 	}
 }
 
 void sigtrap_handler_setup() {
+	LOGD("SIGTRAP handler setup.\n");
 	struct sigaction sig;
 	sigemptyset(&sig.sa_mask);
 	sig.sa_flags = SA_SIGINFO;
@@ -114,11 +121,12 @@ void breakpoint(void* address, /* int ins_size, */ void (*handler)(SigContext* c
 	BPList* iter = bplist_header.next;
 	while (iter) {
 		if (iter->address == address) { // including breakpoint and breakpoint's next
-			printf("Breakpoint %p already has a handler: %p, ignoring new handler %p.\n", iter->address, iter->handler, handler);
+			LOGW("breakpoint %p already has a handler: %p, ignoring new handler %p.\n", iter->address, iter->handler, handler);
 			return;
 		}
 		iter = iter->next;
 	}
+	LOGD("set breakpoint at %p with handler %p.\n", address, handler);
 
 	assert(!mprotect((void*) ((size_t) address & ~0xfff), 0x1000, 7));
 	#if !defined(TRAP_FLAG) // ARM || AARCH64
