@@ -468,12 +468,12 @@ void* load_with_mmap(const char* path) {
 			}
 			memset((void*) ((size_t) base + pheader.p_vaddr + pheader.p_filesz), 0, pheader.p_memsz - pheader.p_filesz);
 		}
-
 		{
 			LOGV("testing memory...\n");
 			char c = *(unsigned char*) (pheader.p_vaddr + (size_t) base);
 			c = *(unsigned char*) (pheader.p_vaddr + (size_t) base + pheader.p_filesz - 1);
 			c = *(unsigned char*) (pheader.p_vaddr + (size_t) base + pheader.p_memsz - 1);
+			c++;
 		}
 		LOGD("mmaped 0x%lx to 0x%lx, filesz 0x%lx, memsz 0x%lx\n", pheader.p_offset, pheader.p_vaddr + (size_t) base, pheader.p_filesz, pheader.p_memsz);
 	}
@@ -496,6 +496,7 @@ const elf_dyn* get_dyn(void* base) {
 			return (elf_dyn*) ((size_t) base + pheader->p_vaddr);
 		}
 	}
+	return NULL;
 }
 
 void* get_symbol_by_name(void* base, const char* symbol) {

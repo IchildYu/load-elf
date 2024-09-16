@@ -37,7 +37,7 @@ int main() {
 		double b = a;
 		printf("%g ** %g == %g\n", a, b, pow(a, b));
 	}
-	/**/
+	**/
 
 	const char* path = "/lib/x86_64-linux-gnu/libc++.so.1";
 	void* base = load_elf(path);

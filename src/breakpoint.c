@@ -2,7 +2,7 @@
 /* references:
  * https://www.cnblogs.com/mmmmar/p/8227915.html
  * https://github.com/scottt/debugbreaks
-/**/
+ **/
 
 #include <stdlib.h>
 #include <string.h>
@@ -213,7 +213,7 @@ int main() {
 	// puts("end");
 	return 0;
 }
-/**/
+**/
 
 /*
 gcc ./main.c -o main -g -D X64

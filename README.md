@@ -4,6 +4,10 @@ ELF loader for x86-64/x86/aarch64/arm.
 
 ## Updates
 
+### 20240916 update
+
+A little fix and add go_compat.
+
 ### 20240815 update
 
 Merge [signal-breakpoint](https://github.com/IchildYu/signal-breakpoint).

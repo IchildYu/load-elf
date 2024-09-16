@@ -1,6 +1,6 @@
 
-CFLAGS = -g -ldl -I./include
-SRC = ./src/logger.c ./src/load_elf.c ./src/breakpoint.c
+CFLAGS = -g -ldl -I./include -Wall -masm=intel
+SRC = ./src/logger.c ./src/load_elf.c ./src/breakpoint.c # ./plugins/go_compat.c
 
 all: all_warning x64
 
