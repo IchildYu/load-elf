@@ -9,9 +9,6 @@ entry: elf entry in loaded go binary;
 main_ptr_in_elf: the address saving main.main, called in runtime.main;
 main_main: your function to run in go env
 
-note: if your main_main returns instead of calling exit(0), python subprocess may truncate output
-
-
 - call_go_func
 void call_go_func(void* func, void* out, size_t out_count, ...); // assume out_count <= 7 && in_count <= 7
 
@@ -160,6 +157,20 @@ static void __attribute__((naked)) main_main_stub() {
 void __attribute((noreturn)) go_compat_entry(void* entry, void* main_ptr_in_elf, void* main_main) {
 	memset(&c_ctx, 0, sizeof(c_ctx));
 	memset(&go_ctx, 0, sizeof(go_ctx));
+
+	// In go env, if main.main returns, it directly calls sys_exit_group to exit
+	// If output was redirected (e.g. python subprocess),
+	// stdout was buffered fully.
+	// And if no fflush was called,
+	// output would disappear.
+	// For normal executables,
+	// they call exit when main returns,
+	// and fflush would always be called.
+	// So here we only call setvbuf in go_compat_entry.
+	setvbuf(stdin, NULL, _IONBF, 0);
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+
 	_main_main = main_main;
 	*(void**) main_ptr_in_elf = main_main_stub;
 	enter_go_entry(entry);

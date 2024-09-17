@@ -4,6 +4,10 @@ ELF loader for x86-64/x86/aarch64/arm.
 
 ## Updates
 
+### 20240917 update
+
+A little fix and add go_compat example.
+
 ### 20240916 update
 
 A little fix and add go_compat.

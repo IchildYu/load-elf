@@ -19,6 +19,13 @@ int getchar();
 #include "elf_struct.h"
 #include "load_elf.h"
 
+#define BADADDR ((void*) -1)
+
+// skip load elf with dlopen if defined
+#define SKIP_LOAD_WITH_DL
+
+#define MMAP_LOAD_BASE ((void*) 0xc0000000)
+
 int (*init_array_filter)(void* base, void (*init_array_item)());
 
 extern int do_reloc(void* base, size_t offset, size_t info, size_t addend, const elf_sym* symtab, const char* strtab) __attribute__((weak));
@@ -127,21 +134,20 @@ void load_global_library(const char* libname) {
 	}
 }
 
-#define SKIP_LOAD_WITH_DL
-
 void* load_with_dl(const char* path) {
 	#ifdef SKIP_LOAD_WITH_DL
 		LOGD("SKIP_LOAD_WITH_DL defined, load_with_dl returns NULL.\n");
-		return NULL;
+		return BADADDR;
 	#endif
 	LOGI("loading %s with dlopen...\n", path);
 	void* handle = dlopen(path, RTLD_LAZY);
 	if (handle == NULL) {
 		LOGE("load_with_dl failed: %s.\n", dlerror());
-		return NULL;
+		return BADADDR;
 	}
 	void* base = *(void**) handle;
 	LOGI("done, loaded at %p.\n", base);
+	assert(base);
 	return base;
 }
 
@@ -375,14 +381,13 @@ int load_dynamic(void* base, const elf_dyn* dyn) {
 	return 1;
 }
 
-#define MMAP_LOAD_BASE ((void*) 0xC0000000)
 void* load_with_mmap(const char* path) {
 	LOGI("loading %s with mmap...\n", path);
 	int fd = open(path, O_RDONLY);
 	LOGV("open(path, O_RDONLY) returns %d\n", fd);
 	if (fd < 0) {
 		LOGE("file `%s' not found.\n", path);
-		return NULL;
+		return BADADDR;
 	}
 
 	elf_header header;
@@ -390,12 +395,12 @@ void* load_with_mmap(const char* path) {
 	if (read(fd, &header, sizeof(header)) != sizeof(header)) {
 		LOGE("read header error\n");
 		close(fd);
-		return NULL;
+		return BADADDR;
 	}
 	LOGV("checking elf header...\n");
 	if (!check_header(&header)) {
 		close(fd);
-		return NULL;
+		return BADADDR;
 	}
 
 	elf_program_header pheader;
@@ -407,15 +412,45 @@ void* load_with_mmap(const char* path) {
 	if (e_phentsize != sizeof(pheader)) {
 		LOGE("unexpected program header size.\n");
 		close(fd);
-		return NULL;
+		return BADADDR;
 	}
 
-	LOGV("determine LOAD_BASE...\n");
-	void* base = MMAP_LOAD_BASE;
-	while (base != mmap(base, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)) {
-		base = (void*) ((size_t) base + 0x1000000);
+	int is_pie; // simple detection, not exact
+	LOGV("determine pie:\n");
+	lseek(fd, header.e_phoff, SEEK_SET);
+	for (int i = 0; i < e_phnum; i++) {
+		LOGV("scanning phdr %d...\n", i);
+		if (read(fd, &pheader, sizeof(pheader)) != sizeof(pheader)) {
+			LOGE("read pheader error\n");
+			close(fd);
+			return BADADDR;
+		}
+		if (pheader.p_type != 1 || pheader.p_memsz == 0) { // not PT_LOAD or nothing to load
+			continue;
+		}
+		if (pheader.p_offset != 0) { // not header
+			continue;
+		}
+		if (pheader.p_vaddr == 0) {
+			is_pie = 1; // load 0 to 0 (pie)
+		} else {
+			is_pie = 0; // load 0 to 0x??? (maybe not pie)
+		}
+		break;
 	}
-	munmap(base, 0x1000);
+	void* base;
+	if (is_pie) {
+		LOGI("pie\n");
+		base = MMAP_LOAD_BASE;
+		LOGV("determine LOAD_BASE...\n");
+		while (base != mmap(base, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)) {
+			base = (void*) ((size_t) base + 0x1000000);
+		}
+		munmap(base, 0x1000);
+	} else {
+		LOGI("not pie\n");
+		base = NULL;
+	}
 	LOGD("trying loading at %p\n", base);
 
 	lseek(fd, header.e_phoff, SEEK_SET);
@@ -424,14 +459,14 @@ void* load_with_mmap(const char* path) {
 		if (read(fd, &pheader, sizeof(pheader)) != sizeof(pheader)) {
 			LOGE("read pheader error\n");
 			close(fd);
-			return NULL;
+			return BADADDR;
 		}
 		if (pheader.p_type != 1 || pheader.p_memsz == 0) { // not PT_LOAD or nothing to load
 			if (pheader.p_type == 2) { // DYNAMIC
 				if (dyn != NULL) {
 					LOGE("duplicated DYNAMIC PHT detected.\n");
 					close(fd);
-					return NULL;
+					return BADADDR;
 				} else {
 					dyn = (elf_dyn*) ((size_t) base + pheader.p_vaddr);
 				}
@@ -442,20 +477,18 @@ void* load_with_mmap(const char* path) {
 		int offset = pheader.p_vaddr & 0xfff;
 		size_t size = (offset + pheader.p_filesz + 0xfff) & ~0xfff;
 		if (addr != mmap(addr, size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE, fd, pheader.p_offset - offset)) {
-		// if (addr != mmap(addr, pheader.p_memsz + offset, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE, fd, pheader.p_offset - offset)) {
-		// if ((uchar*) addr != (uchar*) base + pheader.p_vaddr) {
 			LOGE("failed to mmap 0x%lx to 0x%lx.\n", pheader.p_offset, pheader.p_vaddr + (size_t) base);
 			close(fd);
-			return NULL;
+			return BADADDR;
 		}
 		if (offset) {
-			memset(addr, 0, offset);
+			memset(addr, 0, offset); // not exactly needed
 		}
 		if (pheader.p_memsz != pheader.p_filesz) {
 			if (pheader.p_memsz < pheader.p_filesz) {
 				LOGE("unexpected: filesz bigger than memsz.\n");
 				close(fd);
-				return NULL;
+				return BADADDR;
 			}
 			if (pheader.p_memsz + offset > size) {
 				LOGV("mmap extra pages in memory\n");
@@ -463,7 +496,7 @@ void* load_with_mmap(const char* path) {
 				if (addr != mmap(addr, pheader.p_memsz + offset - size, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_ANON | MAP_SHARED, -1, 0)) {
 					LOGE("failed to mmap 0x%lx to 0x%lx.\n", pheader.p_offset, pheader.p_vaddr + (size_t) base);
 					close(fd);
-					return NULL;
+					return BADADDR;
 				}
 			}
 			memset((void*) ((size_t) base + pheader.p_vaddr + pheader.p_filesz), 0, pheader.p_memsz - pheader.p_filesz);
@@ -473,7 +506,7 @@ void* load_with_mmap(const char* path) {
 			char c = *(unsigned char*) (pheader.p_vaddr + (size_t) base);
 			c = *(unsigned char*) (pheader.p_vaddr + (size_t) base + pheader.p_filesz - 1);
 			c = *(unsigned char*) (pheader.p_vaddr + (size_t) base + pheader.p_memsz - 1);
-			c++;
+			c++; // to avoid warning: c not used
 		}
 		LOGD("mmaped 0x%lx to 0x%lx, filesz 0x%lx, memsz 0x%lx\n", pheader.p_offset, pheader.p_vaddr + (size_t) base, pheader.p_filesz, pheader.p_memsz);
 	}
@@ -483,7 +516,7 @@ void* load_with_mmap(const char* path) {
 	if (!dyn) return base;
 
 	LOGI("DYNAMIC detected, loading...\n");
-	if (!load_dynamic(base, dyn)) return NULL;
+	if (!load_dynamic(base, dyn)) return BADADDR;
 	return base;
 }
 
@@ -535,9 +568,12 @@ void* get_symbol_by_offset(void* base, size_t offset) {
 
 void* load_elf(const char* elf_path) {
 	void* base = load_with_dl(elf_path);
-	if (base == NULL) {
+	if (base == BADADDR) {
 		base = load_with_mmap(elf_path);
 	}
-	assert(base != NULL && *(unsigned int*) base == 0x464c457f);
+	assert(base != BADADDR);
+	if (base) {
+		assert(*(unsigned int*) base == 0x464c457f);
+	}
 	return base;
 }

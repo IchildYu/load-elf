@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-static const char* LOG_LEVEL_CHARS = "EWIDV";
-static const char* LOG_LEVEL_COLORS[] = {
+static const char* const LOG_LEVEL_CHARS = "EWIDV";
+static const char* const LOG_LEVEL_COLORS[] = {
 	"\x1b[31m",
 	"\x1b[33m",
 	"\x1b[32m",

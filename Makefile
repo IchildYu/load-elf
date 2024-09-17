@@ -1,6 +1,9 @@
 
 CFLAGS = -g -ldl -I./include -Wall -masm=intel
-SRC = ./src/logger.c ./src/load_elf.c ./src/breakpoint.c # ./plugins/go_compat.c
+SRC = ./src/logger.c ./src/load_elf.c ./src/breakpoint.c
+
+# uncomment this to use go_compat (x64 only)
+# SRC += ./plugins/go_compat.c
 
 all: all_warning x64
 
