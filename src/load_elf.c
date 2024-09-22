@@ -381,6 +381,169 @@ int load_dynamic(void* base, const elf_dyn* dyn) {
 	return 1;
 }
 
+int load_static(void* base, int fd, elf_header* header) {
+	if (header->e_shentsize != sizeof(elf_section_header)) {
+		LOGW("Unexpected section header entry size, skipped load_static\n");
+		return 1; // something went wrong, maybe nothing important
+	}
+	if (header->e_shnum == 0) {
+		LOGW("No section header\n");
+		return 1; // maybe it's ok?
+	}
+	if (header->e_shnum <= header->e_shtrndx) {
+		LOGE("string table index out of range\n");
+		return 0;
+	}
+	elf_section_header sheader;
+	lseek(fd, header->e_shoff + sizeof(elf_section_header) * header->e_shtrndx, SEEK_SET);
+	if (read(fd, &sheader, sizeof(sheader)) != sizeof(sheader)) {
+		LOGE("read section header error\n");
+		return 0;
+	}
+	size_t strtab_size = sheader.s_size;
+	char* strtab = (char*) malloc(strtab_size + 1);
+	lseek(fd, sheader.s_offset, SEEK_SET);
+	if (read(fd, strtab, strtab_size) != strtab_size) {
+		LOGE("read section header string table error\n");
+		free(strtab);
+		return 0;
+	}
+	strtab[strtab_size] = 0;
+	// ignored init
+	// there's no SHT_INIT, and we can only determine init by section name ".init"
+	// string compare is ugly and unexpected
+	// nowadays init is always set to a empty function
+	// so we just ignore it
+	// if you indeed need to call init, call in your main or init_array_filter.
+	// void (*init)() = NULL;
+	void (**init_array)() = NULL;
+	size_t init_array_count;
+	// ignored fini
+	// same as init
+	// void (*fini)() = NULL;
+	void (**fini_array)() = NULL;
+	size_t fini_array_count;
+	lseek(fd, header->e_shoff, SEEK_SET);
+	for (int i = 0; i < header->e_shnum; i++) {
+		if (read(fd, &sheader, sizeof(sheader)) != sizeof(sheader)) {
+			LOGE("read section header error\n");
+			free(strtab);
+			return 0;
+		}
+		if (sheader.s_size == 0) continue;
+		if (sheader.s_name >= strtab_size) {
+			LOGE("bad section name\n");
+			free(strtab);
+			return 0;
+		}
+		if (sheader.s_addr) {
+			LOGV("section %d: `%s' (in memory: %p - %p)\n", i, strtab + sheader.s_name, (void*) ((size_t) base + sheader.s_addr), (void*) ((size_t) base + sheader.s_addr + sheader.s_size));
+		} else {
+			LOGV("section %d: `%s' (in file: %p - %p)\n", i, strtab + sheader.s_name, (void*) ((size_t) base + sheader.s_offset), (void*) ((size_t) base + sheader.s_offset + sheader.s_size));
+		}
+		switch (sheader.s_type) {
+		case 4: // SHT_RELA
+			if (sheader.s_entsize != sizeof(elf_rela)) {
+				LOGE("bad rela entry size\n");
+				free(strtab);
+				return 0;
+			}
+			if (sheader.s_size % sizeof(elf_rela) != 0) {
+				LOGE("bad rela size\n");
+				free(strtab);
+				return 0;
+			}
+			LOGD("detected rela\n");
+			// All items should be R_IRELATIVE
+			// Here we just ignore this check
+			do_rela(base, (elf_rela*) ((size_t) base + sheader.s_addr), sheader.s_size / sizeof(elf_rela), NULL, NULL);
+			break;
+		case 9: // SHT_REL
+			if (sheader.s_entsize != sizeof(elf_rel)) {
+				LOGE("bad rel entry size\n");
+				free(strtab);
+				return 0;
+			}
+			if (sheader.s_size % sizeof(elf_rel) != 0) {
+				LOGE("bad rel size\n");
+				free(strtab);
+				return 0;
+			}
+			LOGD("detected rel\n");
+			// All items should be R_IRELATIVE
+			// Here we just ignore this check
+			do_rel(base, (elf_rel*) ((size_t) base + sheader.s_addr), sheader.s_size / sizeof(elf_rel), NULL, NULL);
+			break;
+		case 14: // SHT_INIT_ARRAY
+			init_array = (void*) ((size_t) base + sheader.s_addr);
+			init_array_count = sheader.s_size;
+			if (init_array_count % sizeof(size_t) != 0) {
+				LOGD("bad init array size\n");
+				free(strtab);
+				return 0;
+			}
+			init_array_count /= sizeof(size_t);
+			while (init_array_count && *init_array == NULL) {
+				init_array++;
+				init_array_count--;
+			}
+			break;
+		case 15: // SHT_FINI_ARRAY
+			fini_array = (void*) ((size_t) base + sheader.s_addr);
+			fini_array_count = sheader.s_size;
+			if (fini_array_count % sizeof(size_t) != 0) {
+				LOGD("bad init array size\n");
+				free(strtab);
+				return 0;
+			}
+			fini_array_count /= sizeof(size_t);
+			while (fini_array_count && *fini_array == NULL) {
+				fini_array++;
+				fini_array_count--;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+	free(strtab);
+	if (init_array && init_array_count) {
+		LOGI("init array detected:\n");
+		int choice = '?';
+		for (int i = 0; i < init_array_count; i++) {
+			if (!init_array[i]) continue;
+			while (!init_array_filter && choice != 'y' && choice != 'n' && choice != 'a' && choice != 'o') {
+				LOGI("\texecute function %p? [(y)es/(n)o/(a)ll items left/n(o)ne items left] ", init_array[i]);
+				choice = getchar();
+				if (choice != '\n') while (getchar() != '\n') ; // skip line
+				if (choice >= 'A' && choice <= 'Z') choice += 0x20; // convert to lower case
+			}
+			if (init_array_filter) {
+				if (init_array_filter(base, init_array[i])) {
+					LOGI("\texecuting function at %p...\n", init_array[i]);
+					init_array[i]();
+				} else {
+					LOGI("\t skipping function at %p...\n", init_array[i]);
+				}
+			} else if ((uchar) (choice - 'n') > 2) { // 'y' or 'a'
+				LOGI("\texecuting function at %p...\n", init_array[i]);
+				init_array[i]();
+				if (choice == 'y') choice = '?';
+			} else if (choice == 'n') choice = '?';
+		}
+	}
+	if (fini_array && fini_array_count) {
+		LOGI("fini array detected:\n");
+		for (int i = 0; i < fini_array_count; i++) {
+			if (fini_array[i]) {
+				LOGI("\t%p\n", fini_array[i]);
+			}
+		}
+	}
+	LOGI("load_static done.\n");
+	return 1;
+}
+
 void* load_with_mmap(const char* path) {
 	LOGI("loading %s with mmap...\n", path);
 	int fd = open(path, O_RDONLY);
@@ -510,13 +673,24 @@ void* load_with_mmap(const char* path) {
 		}
 		LOGD("mmaped 0x%lx to 0x%lx, filesz 0x%lx, memsz 0x%lx\n", pheader.p_offset, pheader.p_vaddr + (size_t) base, pheader.p_filesz, pheader.p_memsz);
 	}
+	LOGI("mmap done\n");
+
+	if (dyn) {
+		LOGI("DYNAMIC detected, loading...\n");
+		if (!load_dynamic(base, dyn)) {
+			close(fd);
+			return BADADDR;
+		}
+	} else {
+		LOGI("No DYNAMIC, checking static symbols...\n");
+		if (!load_static(base, fd, &header)) {
+			close(fd);
+			return BADADDR;
+		}
+	}
 	LOGI("done, loaded at %p\n", base);
+
 	close(fd);
-
-	if (!dyn) return base;
-
-	LOGI("DYNAMIC detected, loading...\n");
-	if (!load_dynamic(base, dyn)) return BADADDR;
 	return base;
 }
 

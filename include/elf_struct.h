@@ -56,6 +56,19 @@ typedef struct {
 	size_t r_addend;
 } elf_rela;
 
+typedef struct {
+	uint s_name;
+	uint s_type;
+	size_t s_flags;
+	size_t s_addr;
+	size_t s_offset;
+	size_t s_size;
+	uint s_link;
+	uint s_info;
+	size_t s_addralign;
+	size_t s_entsize;
+} elf_section_header;
+
 // elf_sym.st_info
 #define elf_st_bind(info) ((info) >> 4)
 #define elf_st_type(info) ((info) & 0xf)

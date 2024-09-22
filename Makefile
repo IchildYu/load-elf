@@ -1,9 +1,10 @@
 
-CFLAGS = -g -ldl -I./include -Wall -masm=intel
+CFLAGS = -g -ldl -I./include -Wall --pie
 SRC = ./src/logger.c ./src/load_elf.c ./src/breakpoint.c
 
-# uncomment this to use go_compat (x64 only)
+# uncomment this two lines to use go_compat (x64 only)
 # SRC += ./plugins/go_compat.c
+# CFLAGS += -masm=intel
 
 all: all_warning x64
 
