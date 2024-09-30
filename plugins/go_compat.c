@@ -17,113 +17,186 @@ void call_go_func(void* func, void* out, size_t out_count, ...); // assume out_c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "breakpoint.h"
+
+#define USER_STACK_SIZE (0x100000 - 0x100)
+// addr:
+// In go_compat_entry, it is set to user_stack_addr
+// In enter_go_entry, user_stack_addr is set to c_ctx.rsp
+// In main_main_stub, it is set to 0
+// and then it acts return address for go_ret_addr_hook
+
+static void* addr;
+static void* _main_main;
 
 static struct {
-	size_t rdi;
-	size_t rsi;
-	size_t rax;
-	size_t rcx;
-	size_t rdx;
-	size_t rbx;
-	size_t rbp;
-	size_t r8;
-	size_t r9;
-	size_t r10;
-	size_t r11;
-	size_t r12;
-	size_t r13;
-	size_t r14;
-	size_t r15;
+	size_t rdi; /* 00 */
+	size_t rsi; /* 08 */
+	size_t rax; /* 10 */
+	size_t rcx; /* 18 */
+	size_t rdx; /* 20 */
+	size_t rbx; /* 28 */
+	size_t rbp; /* 30 */
+	size_t rsp; /* 38 */
+	size_t r8 ; /* 40 */
+	size_t r9 ; /* 48 */
+	size_t r10; /* 50 */
+	size_t r11; /* 58 */
+	size_t r12; /* 60 */
+	size_t r13; /* 68 */
+	size_t r14; /* 70 */
+	size_t r15; /* 78 */
 } go_ctx, c_ctx;
+
+// saved memory between $fs_base - 0x100 and $fs_base + 0x100
+unsigned char c_fs[0x200];
+unsigned char go_fs[0x200];
 
 static void __attribute__((naked)) save_c_ctx() {
 	asm volatile(
-		"push rdi\n"
-		"lea rdi, [rip+c_ctx]\n"
-		"mov [rdi + 0x08], rsi\n"
-		"mov [rdi + 0x10], rax\n"
-		"mov [rdi + 0x18], rcx\n"
-		"mov [rdi + 0x20], rdx\n"
-		"mov [rdi + 0x28], rbx\n"
-		"mov [rdi + 0x30], rbp\n"
-		"mov [rdi + 0x38], r8 \n"
-		"mov [rdi + 0x40], r9 \n"
-		"mov [rdi + 0x48], r10\n"
-		"mov [rdi + 0x50], r11\n"
-		"mov [rdi + 0x58], r12\n"
-		"mov [rdi + 0x60], r13\n"
-		"mov [rdi + 0x68], r14\n"
-		"mov [rdi + 0x70], r15\n"
+		// save fs memory
 		"push rax\n"
-		"mov rax, [rsp+8]\n"
-		"mov [rdi], rax\n"
+		"push rbx\n"
+		"push rcx\n"
+		"mov rax, -0x100\n"
+		"lea rbx, [rip + c_fs]\n"
+		"save_c_fs_loop:"
+		"mov rcx, fs:[rax]\n"
+		"mov [rbx], rcx\n"
+		"add rax, 8\n"
+		"add rbx, 8\n"
+		"cmp rax, 0x100\n"
+		"jnz save_c_fs_loop\n"
+		"pop rcx\n"
+		"pop rbx\n"
 		"pop rax\n"
-		"pop rdi\n"
+		// save registers
+		"mov [rip + c_ctx + 0x00], rdi\n"
+		"mov [rip + c_ctx + 0x08], rsi\n"
+		"mov [rip + c_ctx + 0x10], rax\n"
+		"mov [rip + c_ctx + 0x18], rcx\n"
+		"mov [rip + c_ctx + 0x20], rdx\n"
+		"mov [rip + c_ctx + 0x28], rbx\n"
+		"mov [rip + c_ctx + 0x30], rbp\n"
+		// here we just save rsp safely
+		// though it should be rsp + 8
+		// because it must be restored by restore_xxx_ctx
+		// and there this extra slot will be put ret addr
+		// and returns original rsp after ret
+		"mov [rip + c_ctx + 0x38], rsp\n"
+		"mov [rip + c_ctx + 0x40], r8 \n"
+		"mov [rip + c_ctx + 0x48], r9 \n"
+		"mov [rip + c_ctx + 0x50], r10\n"
+		"mov [rip + c_ctx + 0x58], r11\n"
+		"mov [rip + c_ctx + 0x60], r12\n"
+		"mov [rip + c_ctx + 0x68], r13\n"
+		"mov [rip + c_ctx + 0x70], r14\n"
+		"mov [rip + c_ctx + 0x78], r15\n"
 		"ret\n"
 	);
 }
 
 static void __attribute__((naked)) restore_c_ctx() {
 	asm volatile(
-		"push rdi\n"
-		"lea rdi, [rip+c_ctx]\n"
-		"mov rbx, [rdi + 0x28]\n"
-		"mov rbp, [rdi + 0x30]\n"
-		"mov r8 , [rdi + 0x38]\n"
-		"mov r9 , [rdi + 0x40]\n"
-		"mov r10, [rdi + 0x48]\n"
-		"mov r11, [rdi + 0x50]\n"
-		"mov r12, [rdi + 0x58]\n"
-		"mov r13, [rdi + 0x60]\n"
-		"mov r14, [rdi + 0x68]\n"
-		"mov r15, [rdi + 0x70]\n"
-		"pop rdi\n"
+		// restore fs memory
+		"mov rax, -0x100\n"
+		"lea rbx, [rip + c_fs]\n"
+		"restore_c_fs_loop:"
+		"mov rcx, [rbx]\n"
+		"mov fs:[rax], rcx\n"
+		"add rax, 8\n"
+		"add rbx, 8\n"
+		"cmp rax, 0x100\n"
+		"jnz restore_c_fs_loop\n"
+		// restore registers
+		"mov rax, [rsp]\n" // retaddr
+		"mov rdi, [rip + c_ctx + 0x00]\n"
+		"mov rsi, [rip + c_ctx + 0x08]\n"
+		"mov rcx, [rip + c_ctx + 0x18]\n"
+		"mov rdx, [rip + c_ctx + 0x20]\n"
+		"mov rbx, [rip + c_ctx + 0x28]\n"
+		"mov rbp, [rip + c_ctx + 0x30]\n"
+		"mov rsp, [rip + c_ctx + 0x38]\n"
+		"mov r8 , [rip + c_ctx + 0x40]\n"
+		"mov r9 , [rip + c_ctx + 0x48]\n"
+		"mov r10, [rip + c_ctx + 0x50]\n"
+		"mov r11, [rip + c_ctx + 0x58]\n"
+		"mov r12, [rip + c_ctx + 0x60]\n"
+		"mov r13, [rip + c_ctx + 0x68]\n"
+		"mov r14, [rip + c_ctx + 0x70]\n"
+		"mov r15, [rip + c_ctx + 0x78]\n"
+		"mov [rsp], rax\n"
+		"mov rax, [rip + c_ctx + 0x10]\n"
 		"ret\n"
 	);
 }
 
 static void __attribute__((naked)) save_go_ctx() {
 	asm volatile(
-		"push rdi\n"
-		"lea rdi, [rip+go_ctx]\n"
-		"mov [rdi + 0x08], rsi\n"
-		"mov [rdi + 0x10], rax\n"
-		"mov [rdi + 0x18], rcx\n"
-		"mov [rdi + 0x20], rdx\n"
-		"mov [rdi + 0x28], rbx\n"
-		"mov [rdi + 0x30], rbp\n"
-		"mov [rdi + 0x38], r8 \n"
-		"mov [rdi + 0x40], r9 \n"
-		"mov [rdi + 0x48], r10\n"
-		"mov [rdi + 0x50], r11\n"
-		"mov [rdi + 0x58], r12\n"
-		"mov [rdi + 0x60], r13\n"
-		"mov [rdi + 0x68], r14\n"
-		"mov [rdi + 0x70], r15\n"
 		"push rax\n"
-		"mov rax, [rsp+8]\n"
-		"mov [rdi], rax\n"
+		"push rbx\n"
+		"push rcx\n"
+		"mov rax, -0x100\n"
+		"lea rbx, [rip + go_fs]\n"
+		"save_go_fs_loop:"
+		"mov rcx, fs:[rax]\n"
+		"mov [rbx], rcx\n"
+		"add rax, 8\n"
+		"add rbx, 8\n"
+		"cmp rax, 0x100\n"
+		"jnz save_go_fs_loop\n"
+		"pop rcx\n"
+		"pop rbx\n"
 		"pop rax\n"
-		"pop rdi\n"
+		"mov [rip + go_ctx + 0x00], rdi\n"
+		"mov [rip + go_ctx + 0x08], rsi\n"
+		"mov [rip + go_ctx + 0x10], rax\n"
+		"mov [rip + go_ctx + 0x18], rcx\n"
+		"mov [rip + go_ctx + 0x20], rdx\n"
+		"mov [rip + go_ctx + 0x28], rbx\n"
+		"mov [rip + go_ctx + 0x30], rbp\n"
+		"mov [rip + go_ctx + 0x38], rsp\n"
+		"mov [rip + go_ctx + 0x40], r8\n"
+		"mov [rip + go_ctx + 0x48], r9\n"
+		"mov [rip + go_ctx + 0x50], r10\n"
+		"mov [rip + go_ctx + 0x58], r11\n"
+		"mov [rip + go_ctx + 0x60], r12\n"
+		"mov [rip + go_ctx + 0x68], r13\n"
+		"mov [rip + go_ctx + 0x70], r14\n"
+		"mov [rip + go_ctx + 0x78], r15\n"
 		"ret\n"
 	);
 }
 
 static void __attribute__((naked)) restore_go_ctx() {
 	asm volatile(
-		"push rdi\n"
-		"lea rdi, [rip+go_ctx]\n"
-		"mov rdx, [rdi + 0x20]\n"
-		"mov rbp, [rdi + 0x30]\n"
-		"mov r8 , [rdi + 0x38]\n"
-		"mov r9 , [rdi + 0x40]\n"
-		"mov r10, [rdi + 0x48]\n"
-		"mov r11, [rdi + 0x50]\n"
-		"mov r12, [rdi + 0x58]\n"
-		"mov r13, [rdi + 0x60]\n"
-		"mov r14, [rdi + 0x68]\n"
-		"mov r15, [rdi + 0x70]\n"
-		"pop rdi\n"
+		"mov rax, -0x100\n"
+		"lea rbx, [rip + go_fs]\n"
+		"restore_go_fs_loop:"
+		"mov rcx, [rbx]\n"
+		"mov fs:[rax], rcx\n"
+		"add rax, 8\n"
+		"add rbx, 8\n"
+		"cmp rax, 0x100\n"
+		"jnz restore_go_fs_loop\n"
+		"mov rax, [rsp]\n"
+		"mov rdi, [rip + go_ctx + 0x00]\n"
+		"mov rsi, [rip + go_ctx + 0x08]\n"
+		"mov rcx, [rip + go_ctx + 0x18]\n"
+		"mov rdx, [rip + go_ctx + 0x20]\n"
+		"mov rbx, [rip + go_ctx + 0x28]\n"
+		"mov rbp, [rip + go_ctx + 0x30]\n"
+		"mov rsp, [rip + go_ctx + 0x38]\n"
+		"mov r8 , [rip + go_ctx + 0x40]\n"
+		"mov r9 , [rip + go_ctx + 0x48]\n"
+		"mov r10, [rip + go_ctx + 0x50]\n"
+		"mov r11, [rip + go_ctx + 0x58]\n"
+		"mov r12, [rip + go_ctx + 0x60]\n"
+		"mov r13, [rip + go_ctx + 0x68]\n"
+		"mov r14, [rip + go_ctx + 0x70]\n"
+		"mov r15, [rip + go_ctx + 0x78]\n"
+		"mov [rsp], rax\n"
+		"mov rax, [rip + go_ctx + 0x10]\n"
 		"ret\n"
 	);
 }
@@ -131,25 +204,50 @@ static void __attribute__((naked)) restore_go_ctx() {
 static void __attribute__((naked,noreturn)) enter_go_entry(void* entry) {
 	asm volatile(
 		"call save_c_ctx\n"
+		"mov rax, [rip + addr]\n"
+		"mov [rip + c_ctx + 0x38], rax\n" // c_ctx.rsp = addr
 		"push 0\n"
 		"push 0\n"
 		"push 0\n"
 		"push 0\n"
+		// currently args-setting not supported
+		// though it's simple
+		"lea rax, [rip+cmdline]\n"
+		"push rax\n"
+		"push 1\n"
 		"jmp rdi\n"
+		"cmdline:\n"
+		".string \"./main\"\n"
 	);
 }
 
-static void* _main_main;
+static void go_ret_addr_hook(SigContext* ctx) {
+	// here a go func returns back to go runtime
+	if (addr) {
+		// go func called from call_go_func
+		// restores rsp and rip
+		ctx->rsp -= 8;
+		ctx->rip = (size_t) addr;
+		addr = 0;
+	} else {
+		// returns from main_main_stub
+		// nothing to do
+		return;
+	}
+}
 
 static void __attribute__((naked)) main_main_stub() {
 	asm volatile(
-		"sub rsp, 8\n"
+		"mov qword ptr [rip + addr], 0\n"
 		"call save_go_ctx\n"
 		"call restore_c_ctx\n"
+		"mov rdi, [rip + go_ctx + 0x38]\n" // rdi = [goctx.rsp + 8], go runtime retaddr
+		"mov rdi, [rdi + 8]\n"
+		"lea rsi, [rip + go_ret_addr_hook]\n"
+		"call breakpoint\n" // set hook at go runtime retaddr
 		"call [rip+_main_main]\n"
 		"call save_c_ctx\n"
 		"call restore_go_ctx\n"
-		"add rsp, 8\n"
 		"ret\n"
 	);
 }
@@ -171,6 +269,9 @@ void __attribute((noreturn)) go_compat_entry(void* entry, void* main_ptr_in_elf,
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 
+	// before main_main_stub, it's saved user stack
+	addr = (void*) ((((size_t) malloc(USER_STACK_SIZE) + USER_STACK_SIZE) & ~0xff) - 0x18);
+
 	_main_main = main_main;
 	*(void**) main_ptr_in_elf = main_main_stub;
 	enter_go_entry(entry);
@@ -185,6 +286,7 @@ void __attribute((noreturn)) go_compat_entry(void* entry, void* main_ptr_in_elf,
 	save_c_ctx();
 	restore_go_ctx();
 	restore_c_ctx();
+	(void) go_ret_addr_hook;
 }
 
 void call_go_func(void* func, void* out, size_t out_count, ...); // assume out_count <= 7 && in_count <= 7
@@ -193,84 +295,67 @@ asm(
 	".global call_go_func\n"
 	"call_go_func:\n"
 	"call save_c_ctx\n"
-	"push rdx\n" // out_count
-	"push rsi\n" // out
-	"push rdi\n" // func
-	"push rcx\n" // arg1
-	"push r8\n" // arg2
-	"push r9\n" // arg3
-	"mov rax, [rsp + 0x38]\n"
-	"push rax\n" // arg4
-	"mov rax, [rsp + 0x48]\n"
-	"push rax\n" // arg5
-	"mov rax, [rsp + 0x58]\n"
-	"push rax\n" // arg6
-	"mov rax, [rsp + 0x68]\n"
-	"push rax\n" // arg7
 	"call restore_go_ctx\n"
-	"pop r9\n" // arg7
-	"pop r8\n" // arg6
-	"pop rsi\n" // arg5
-	"pop rdi\n" // arg4
-	"pop rcx\n" // arg3
-	"pop rbx\n" // arg2
-	"pop rax\n" // arg1
-	"call [rsp]\n"
+	"lea rax, [rip + go_func_ret]\n"
+	"mov [rip + addr], rax\n" // set go runtime retaddr
+
+	// prepare args
+	"mov rax, [rip + c_ctx + 0x18]\n" // arg1: rcx -> rax
+	"mov rbx, [rip + c_ctx + 0x40]\n" // arg2: r8 -> rbx
+	"mov rcx, [rip + c_ctx + 0x48]\n" // arg3: r9 -> rcx
+	"mov r9, [rip + c_ctx + 0x38]\n" // rsp
+	"mov rdi, [r9 + 0x10]\n" // arg4: [rsp+0x08] -> rdi
+	"mov rsi, [r9 + 0x18]\n" // arg5: [rsp+0x10] -> rsi
+	"mov r8, [r9 + 0x20]\n" // arg6: [rsp+0x18] -> r8
+	"mov r9, [r9 + 0x28]\n" // arg7: [rsp+0x20] -> r9
+	"jmp [rip + c_ctx + 0x00]\n" // rdi, func
+
+	"go_func_ret:\n"
 	"call save_go_ctx\n"
+	"call restore_c_ctx\n"
 
-	"cmp qword ptr [rsp + 0x8], 0\n"
+	"cmp rsi, 0\n" // out is NULL
 	"jz call_go_func_ret\n"
 
-	"cmp qword ptr [rsp + 0x10], 0\n" // ret1
+	"cmp rdx, 0\n"
 	"jz call_go_func_ret\n"
-	"xchg [rsp + 8], rbx\n"
-	"mov [rbx], rax\n"
-	"xchg [rsp + 8], rbx\n"
-	"mov rax, [rsp + 8]\n"
-	"add rax, 8\n"
-	"dec qword ptr [rsp + 0x10]\n"
 
-	"cmp qword ptr [rsp + 0x10], 0\n" // ret2
+	"mov rax, [rip + go_ctx + 0x10]\n" // ret1, rax
+	"mov [rsi + 0x00], rax\n"
+	"cmp rdx, 1\n"
 	"jz call_go_func_ret\n"
-	"mov [rax], rbx\n"
-	"add rax, 8\n"
-	"dec qword ptr [rsp + 0x10]\n"
 
-	"cmp qword ptr [rsp + 0x10], 0\n" // ret3
+	"mov rax, [rip + go_ctx + 0x28]\n" // ret2, rbx
+	"mov [rsi + 0x08], rax\n"
+	"cmp rdx, 2\n"
 	"jz call_go_func_ret\n"
-	"mov [rax], rcx\n"
-	"add rax, 8\n"
-	"dec qword ptr [rsp + 0x10]\n"
 
-	"cmp qword ptr [rsp + 0x10], 0\n" // ret4
+	"mov rax, [rip + go_ctx + 0x18]\n" // ret3, rcx
+	"mov [rsi + 0x10], rax\n"
+	"cmp rdx, 3\n"
 	"jz call_go_func_ret\n"
-	"mov [rax], rdi\n"
-	"add rax, 8\n"
-	"dec qword ptr [rsp + 0x10]\n"
 
-	"cmp qword ptr [rsp + 0x10], 0\n" // ret5
+	"mov rax, [rip + go_ctx + 0x00]\n" // ret4, rdi
+	"mov [rsi + 0x18], rax\n"
+	"cmp rdx, 4\n"
 	"jz call_go_func_ret\n"
-	"mov [rax], rsi\n"
-	"add rax, 8\n"
-	"dec qword ptr [rsp + 0x10]\n"
 
-	"cmp qword ptr [rsp + 0x10], 0\n" // ret6
+	"mov rax, [rip + go_ctx + 0x08]\n" // ret5, rsi
+	"mov [rsi + 0x20], rax\n"
+	"cmp rdx, 5\n"
 	"jz call_go_func_ret\n"
-	"mov [rax], r8\n"
-	"add rax, 8\n"
-	"dec qword ptr [rsp + 0x10]\n"
 
-	"cmp qword ptr [rsp + 0x10], 0\n" // ret7
+	"mov rax, [rip + go_ctx + 0x40]\n" // ret6, r8
+	"mov [rsi + 0x28], rax\n"
+	"cmp rdx, 6\n"
 	"jz call_go_func_ret\n"
-	"mov [rax], r9\n"
-	"add rax, 8\n"
-	"dec qword ptr [rsp + 0x10]\n"
+
+	"mov rax, [rip + go_ctx + 0x48]\n" // ret7, r9
+	"mov [rsi + 0x30], rax\n"
 
 	// ignore more ret
 
 	"call_go_func_ret:\n"
-	"call restore_c_ctx\n"
-	"add rsp, 0x18\n"
 	"ret\n"
 );
 

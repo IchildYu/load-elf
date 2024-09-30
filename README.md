@@ -4,6 +4,10 @@ ELF loader for x86-64/x86/aarch64/arm.
 
 ## Updates
 
+### 20240930 update
+
+go_compat more robust
+
 ### 20240922 update
 
 Add support for statically compiled binary.
