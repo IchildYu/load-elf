@@ -17,17 +17,20 @@ void call_go_func(void* func, void* out, size_t out_count, ...); // assume out_c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "breakpoint.h"
 
 #define USER_STACK_SIZE (0x100000 - 0x100)
-// addr:
+// addr1:
 // In go_compat_entry, it is set to user_stack_addr
 // In enter_go_entry, user_stack_addr is set to c_ctx.rsp
 // In main_main_stub, it is set to 0
-// and then it acts return address for go_ret_addr_hook
+// and then it is return address for go_ret_addr_hook
+static void* addr1;
 
-static void* addr;
-static void* _main_main;
+// addr2:
+// In go_compat_entry, it is set to user's main.main
+// In main_main_stub, user's main.main is used
+// and then it is set to go runtime retaddr
+static void* addr2;
 
 static struct {
 	size_t rdi; /* 00 */
@@ -48,9 +51,10 @@ static struct {
 	size_t r15; /* 78 */
 } go_ctx, c_ctx;
 
+static unsigned char saved_go_ins[16];
 // saved memory between $fs_base - 0x100 and $fs_base + 0x100
-unsigned char c_fs[0x200];
-unsigned char go_fs[0x200];
+static unsigned char c_fs[0x200];
+static unsigned char go_fs[0x200];
 
 static void __attribute__((naked)) save_c_ctx() {
 	asm volatile(
@@ -204,8 +208,8 @@ static void __attribute__((naked)) restore_go_ctx() {
 static void __attribute__((naked,noreturn)) enter_go_entry(void* entry) {
 	asm volatile(
 		"call save_c_ctx\n"
-		"mov rax, [rip + addr]\n"
-		"mov [rip + c_ctx + 0x38], rax\n" // c_ctx.rsp = addr
+		"mov rax, [rip + addr1]\n"
+		"mov [rip + c_ctx + 0x38], rax\n" // c_ctx.rsp = addr1
 		"push 0\n"
 		"push 0\n"
 		"push 0\n"
@@ -221,31 +225,52 @@ static void __attribute__((naked,noreturn)) enter_go_entry(void* entry) {
 	);
 }
 
-static void go_ret_addr_hook(SigContext* ctx) {
+static void __attribute__((naked)) go_ret_addr_hook() {
 	// here a go func returns back to go runtime
-	if (addr) {
-		// go func called from call_go_func
-		// restores rsp and rip
-		ctx->rsp -= 8;
-		ctx->rip = (size_t) addr;
-		addr = 0;
-	} else {
-		// returns from main_main_stub
-		// nothing to do
-		return;
-	}
+	asm volatile(
+		"cmp qword ptr [rip + addr1], 0\n"
+		"jz go_runtime_exit\n"
+		"push [rip + addr2]\n"
+		"push [rip + addr1]\n"
+		"mov qword ptr [rip + addr1], 0\n"
+		"ret\n"
+		"go_runtime_exit:"
+		"push [rip + saved_go_ins + 8]\n"
+		"push [rip + saved_go_ins]\n"
+		"mov rax, [rip + addr2]\n"
+		"pop [rax]\n"
+		"pop [rax + 8]\n"
+		"jmp rax\n"
+	);
 }
 
+/*
+push rax
+mov rax, 0xdeadbeefcafebabe
+xchg [rsp], rax
+ret
+**/
 static void __attribute__((naked)) main_main_stub() {
 	asm volatile(
-		"mov qword ptr [rip + addr], 0\n"
+		"mov qword ptr [rip + addr1], 0\n"
 		"call save_go_ctx\n"
 		"call restore_c_ctx\n"
-		"mov rdi, [rip + go_ctx + 0x38]\n" // rdi = [goctx.rsp + 8], go runtime retaddr
-		"mov rdi, [rdi + 8]\n"
-		"lea rsi, [rip + go_ret_addr_hook]\n"
-		"call breakpoint\n" // set hook at go runtime retaddr
-		"call [rip+_main_main]\n"
+
+		"push [rip + addr2]\n"
+		"mov rax, [rip + go_ctx + 0x38]\n" // rsp
+		"mov rax, [rax + 8]\n" // go runtime retaddr
+		"mov [rip + addr2], rax\n"
+		"push [rax + 8]\n"
+		"push [rax]\n"
+		"pop [rip + saved_go_ins]\n"
+		"pop [rip + saved_go_ins + 8]\n"
+		"mov dword ptr [rax], 0xb84850\n"
+		"lea rcx, [rip + go_ret_addr_hook]\n"
+		"mov [rax + 3], rcx\n"
+		"mov byte ptr [rax + 0xb], 0x48\n"
+		"mov dword ptr [rax + 0xc], 0xc3240487\n"
+		"pop rax\n"
+		"call rax\n"
 		"call save_c_ctx\n"
 		"call restore_go_ctx\n"
 		"ret\n"
@@ -270,9 +295,8 @@ void __attribute((noreturn)) go_compat_entry(void* entry, void* main_ptr_in_elf,
 	setvbuf(stderr, NULL, _IONBF, 0);
 
 	// before main_main_stub, it's saved user stack
-	addr = (void*) ((((size_t) malloc(USER_STACK_SIZE) + USER_STACK_SIZE) & ~0xff) - 0x18);
-
-	_main_main = main_main;
+	addr1 = (void*) ((((size_t) malloc(USER_STACK_SIZE) + USER_STACK_SIZE) & ~0xff) - 0x18);
+	addr2 = main_main;
 	*(void**) main_ptr_in_elf = main_main_stub;
 	enter_go_entry(entry);
 
@@ -282,11 +306,14 @@ void __attribute((noreturn)) go_compat_entry(void* entry, void* main_ptr_in_elf,
 
 	// unused
 	// avoid warning: ‘save_go_ctx’ defined but not used
-	save_go_ctx();
-	save_c_ctx();
-	restore_go_ctx();
-	restore_c_ctx();
+	(void) save_go_ctx;
+	(void) save_c_ctx;
+	(void) restore_go_ctx;
+	(void) restore_c_ctx;
 	(void) go_ret_addr_hook;
+	(void) c_fs;
+	(void) go_fs;
+	(void) saved_go_ins;
 }
 
 void call_go_func(void* func, void* out, size_t out_count, ...); // assume out_count <= 7 && in_count <= 7
@@ -297,7 +324,7 @@ asm(
 	"call save_c_ctx\n"
 	"call restore_go_ctx\n"
 	"lea rax, [rip + go_func_ret]\n"
-	"mov [rip + addr], rax\n" // set go runtime retaddr
+	"mov [rip + addr1], rax\n" // set go runtime retaddr
 
 	// prepare args
 	"mov rax, [rip + c_ctx + 0x18]\n" // arg1: rcx -> rax

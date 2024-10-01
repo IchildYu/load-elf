@@ -4,7 +4,7 @@ ELF loader for x86-64/x86/aarch64/arm.
 
 ## Updates
 
-### 20240930 update
+### 20241001 update
 
 go_compat more robust
 
